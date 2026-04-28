@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 import concurrent.futures
 from urllib.parse import urljoin, urlparse
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import threading
 
 class ImageSpiderGUI:
@@ -75,6 +75,7 @@ class ImageSpiderGUI:
         button_frame.pack(fill=tk.X, pady=10)
         
         ttk.Button(button_frame, text="开始爬取", command=self.start_crawl).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="从文件导入", command=self.import_from_file).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="浏览图片", command=self.browse_images).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="退出", command=root.quit).pack(side=tk.RIGHT, padx=5)
     
@@ -331,6 +332,71 @@ class ImageSpiderGUI:
             os.startfile(save_dir)
         else:
             messagebox.showinfo("提示", "还没有下载图片")
+    
+    def import_from_file(self):
+        # 打开文件选择对话框
+        file_path = filedialog.askopenfilename(
+            title="选择包含图片URL的txt文件",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+        )
+        
+        if not file_path:
+            return
+        
+        # Clear download list
+        self.download_list.delete(0, tk.END)
+        self.download_list.insert(tk.END, "已下载的图片:")
+        self.download_list.insert(tk.END, "------------------------")
+        
+        # Run download in separate thread
+        thread = threading.Thread(target=self.download_from_file, args=(file_path,))
+        thread.daemon = True
+        thread.start()
+    
+    def download_from_file(self, file_path):
+        try:
+            # Create save directory
+            save_dir = "downloaded_images"
+            if not os.path.exists(save_dir):
+                os.makedirs(save_dir)
+            
+            # Read URLs from file
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Extract valid image URLs
+            image_urls = []
+            for line in lines:
+                line = line.strip()
+                if line and line.startswith(('http://', 'https://')):
+                    # Check if it's an image URL
+                    if line.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg')):
+                        image_urls.append(line)
+            
+            total_images = len(image_urls)
+            self.status_var.set(f"找到 {total_images} 个图片URL")
+            
+            # Download images concurrently
+            success_count = 0
+            if total_images > 0:
+                self.status_var.set(f"正在下载 {total_images} 张图片...")
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    futures = []
+                    for img_url in image_urls:
+                        future = executor.submit(self.download_image, img_url, save_dir)
+                        futures.append(future)
+                    
+                    for future in concurrent.futures.as_completed(futures):
+                        if future.result():
+                            success_count += 1
+            
+            self.status_var.set(f"下载完成！成功 {success_count}/{total_images}")
+            messagebox.showinfo("完成", f"成功下载 {success_count} 张图片\n保存到: {os.path.abspath(save_dir)}")
+            
+        except Exception as e:
+            self.status_var.set(f"错误: {str(e)}")
+            messagebox.showerror("错误", str(e))
 
 if __name__ == "__main__":
     root = tk.Tk()
