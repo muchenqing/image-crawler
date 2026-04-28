@@ -75,6 +75,7 @@ class ImageSpiderGUI:
         button_frame.pack(fill=tk.X, pady=10)
         
         ttk.Button(button_frame, text="开始爬取", command=self.start_crawl).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="批量爬取网页", command=self.batch_crawl).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="从文件导入", command=self.import_from_file).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="浏览图片", command=self.browse_images).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="退出", command=root.quit).pack(side=tk.RIGHT, padx=5)
@@ -361,6 +362,127 @@ class ImageSpiderGUI:
         thread = threading.Thread(target=self.download_from_file, args=(file_path,))
         thread.daemon = True
         thread.start()
+    
+    def batch_crawl(self):
+        # 打开文件选择对话框
+        file_path = filedialog.askopenfilename(
+            title="选择包含网页URL的txt文件",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")]
+        )
+        
+        if not file_path:
+            return
+        
+        # Clear download list
+        self.download_list.delete(0, tk.END)
+        self.download_list.insert(tk.END, "已下载的图片:")
+        self.download_list.insert(tk.END, "------------------------")
+        
+        # Run batch crawl in separate thread
+        thread = threading.Thread(target=self.crawl_from_url_file, args=(file_path,))
+        thread.daemon = True
+        thread.start()
+    
+    def crawl_from_url_file(self, file_path):
+        try:
+            # Read URLs from file
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Extract valid webpage URLs
+            urls = []
+            for line in lines:
+                line = line.strip()
+                if line and line.startswith(('http://', 'https://')):
+                    urls.append(line)
+            
+            total_urls = len(urls)
+            if total_urls == 0:
+                messagebox.showinfo("提示", "文件中没有找到有效的网页URL")
+                return
+            
+            self.status_var.set(f"找到 {total_urls} 个网页URL")
+            
+            # Crawl each URL one by one
+            total_success = 0
+            total_images = 0
+            
+            for i, url in enumerate(urls, 1):
+                self.status_var.set(f"正在爬取 [{i}/{total_urls}]: {url}")
+                
+                try:
+                    # Extract folder name from URL
+                    parsed_url = urlparse(url)
+                    domain = parsed_url.netloc.replace('.', '_')
+                    path = parsed_url.path.strip('/').replace('/', '_')[:50]
+                    folder_name = f"{domain}_{path}" if path else domain
+                    folder_name = ''.join(c for c in folder_name if c.isalnum() or c in ('_', '-'))
+                    
+                    save_dir = os.path.join("downloaded_images", folder_name)
+                    if not os.path.exists(save_dir):
+                        os.makedirs(save_dir)
+                    
+                    # Fetch webpage with headers
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                    }
+                    timeout = 15
+                    response = requests.get(url, headers=headers, timeout=timeout)
+                    response.raise_for_status()
+                    
+                    # Parse HTML
+                    soup = BeautifulSoup(response.content, 'lxml')
+                    
+                    # Extract image URLs
+                    image_urls = []
+                    
+                    # Check img tags
+                    img_tags = soup.find_all('img')
+                    for img in img_tags:
+                        img_url = img.get('src')
+                        if img_url:
+                            if not img_url.startswith(('http://', 'https://')):
+                                img_url = urljoin(url, img_url)
+                            if img_url not in image_urls and img_url.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg')):
+                                image_urls.append(img_url)
+                    
+                    # Check links
+                    links = soup.find_all('a')
+                    for link in links:
+                        href = link.get('href')
+                        if href and href.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg')):
+                            if not href.startswith(('http://', 'https://')):
+                                href = urljoin(url, href)
+                            if href not in image_urls:
+                                image_urls.append(href)
+                    
+                    # Download images
+                    success_count = 0
+                    if image_urls:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                            futures = []
+                            for img_url in image_urls:
+                                future = executor.submit(self.download_image, img_url, save_dir)
+                                futures.append(future)
+                            
+                            for future in concurrent.futures.as_completed(futures):
+                                if future.result():
+                                    success_count += 1
+                    
+                    total_success += success_count
+                    total_images += len(image_urls)
+                    self.status_var.set(f"完成 [{i}/{total_urls}]: 成功 {success_count}/{len(image_urls)} 张")
+                
+                except Exception as e:
+                    self.status_var.set(f"爬取失败 [{i}/{total_urls}]: {str(e)}")
+                    continue
+            
+            self.status_var.set(f"批量爬取完成！总成功 {total_success}/{total_images} 张")
+            messagebox.showinfo("完成", f"批量爬取完成！\n总共处理 {total_urls} 个网页\n成功下载 {total_success} 张图片")
+            
+        except Exception as e:
+            self.status_var.set(f"错误: {str(e)}")
+            messagebox.showerror("错误", str(e))
     
     def get_original_url(self, url):
         # 尝试从缩略图URL获取原图URL
