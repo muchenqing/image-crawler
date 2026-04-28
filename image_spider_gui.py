@@ -353,6 +353,33 @@ class ImageSpiderGUI:
         thread.daemon = True
         thread.start()
     
+    def get_original_url(self, url):
+        # 尝试从缩略图URL获取原图URL
+        # 常见的缩略图模式
+        patterns = [
+            # Pixiv thumbnail patterns
+            ('/c/(\d+)x(\d+)_img-master/', '/img-original/'),
+            ('/_master1200.jpg', '.jpg'),
+            ('/_master1200.png', '.png'),
+            ('/_master1200.webp', '.webp'),
+            # General thumbnail patterns
+            ('/thumbnail/', '/'),
+            ('/thumb/', '/'),
+            ('/small/', '/'),
+            ('/medium/', '/'),
+            ('_thumb', ''),
+            ('_small', ''),
+            ('_medium', ''),
+        ]
+        
+        original_url = url
+        for pattern, replacement in patterns:
+            if pattern in url:
+                original_url = url.replace(pattern, replacement)
+                break
+        
+        return original_url
+    
     def download_from_file(self, file_path):
         try:
             # Create save directory
@@ -364,27 +391,34 @@ class ImageSpiderGUI:
             with open(file_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
-            # Extract valid image URLs
+            # Extract valid image URLs and try to get original images
             image_urls = []
+            original_urls = []
+            
             for line in lines:
                 line = line.strip()
                 if line and line.startswith(('http://', 'https://')):
                     # Check if it's an image URL
                     if line.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.svg')):
                         image_urls.append(line)
+                        # Try to get original URL
+                        original_url = self.get_original_url(line)
+                        original_urls.append(original_url)
             
             total_images = len(image_urls)
             self.status_var.set(f"找到 {total_images} 个图片URL")
             
-            # Download images concurrently
+            # Download images concurrently, prefer original URLs
             success_count = 0
             if total_images > 0:
                 self.status_var.set(f"正在下载 {total_images} 张图片...")
                 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                     futures = []
-                    for img_url in image_urls:
-                        future = executor.submit(self.download_image, img_url, save_dir)
+                    for i, img_url in enumerate(image_urls):
+                        # Use original URL if different from thumbnail
+                        download_url = original_urls[i] if original_urls[i] != img_url else img_url
+                        future = executor.submit(self.download_image_with_fallback, download_url, img_url, save_dir)
                         futures.append(future)
                     
                     for future in concurrent.futures.as_completed(futures):
@@ -397,6 +431,43 @@ class ImageSpiderGUI:
         except Exception as e:
             self.status_var.set(f"错误: {str(e)}")
             messagebox.showerror("错误", str(e))
+    
+    def download_image_with_fallback(self, original_url, fallback_url, save_dir):
+        # Try to download original image first, fallback to thumbnail if fails
+        try:
+            response = requests.get(original_url, stream=True, timeout=10)
+            response.raise_for_status()
+            
+            parsed_url = urlparse(original_url)
+            filename = os.path.basename(parsed_url.path)
+            
+            if not filename:
+                filename = f"image_{hash(original_url)}.jpg"
+            
+            if not os.path.splitext(filename)[1]:
+                content_type = response.headers.get('Content-Type', '')
+                if 'image/jpeg' in content_type:
+                    filename += ".jpg"
+                elif 'image/png' in content_type:
+                    filename += ".png"
+                elif 'image/gif' in content_type:
+                    filename += ".gif"
+                elif 'image/webp' in content_type:
+                    filename += ".webp"
+                else:
+                    filename += ".jpg"
+            
+            save_path = os.path.join(save_dir, filename)
+            
+            with open(save_path, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            
+            self.root.after(0, lambda: self.download_list.insert(tk.END, f"[原图] {filename}"))
+            return True
+        except Exception as e:
+            # Fallback to thumbnail
+            return self.download_image(fallback_url, save_dir)
 
 if __name__ == "__main__":
     root = tk.Tk()
