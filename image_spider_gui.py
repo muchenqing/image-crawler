@@ -121,8 +121,17 @@ class ImageSpiderGUI:
     
     def crawl_images(self, url):
         try:
+            # Extract folder name from URL
+            parsed_url = urlparse(url)
+            # Get the domain and path to create a unique folder name
+            domain = parsed_url.netloc.replace('.', '_')
+            path = parsed_url.path.strip('/').replace('/', '_')[:50]
+            folder_name = f"{domain}_{path}" if path else domain
+            # Remove invalid characters
+            folder_name = ''.join(c for c in folder_name if c.isalnum() or c in ('_', '-'))
+            
             # Create save directory
-            save_dir = "downloaded_images"
+            save_dir = os.path.join("downloaded_images", folder_name)
             if not os.path.exists(save_dir):
                 os.makedirs(save_dir)
             
